@@ -9,6 +9,7 @@ import {
 	getMermaid,
 	MermaidAPI,
 	MermaidDiskCache,
+	withDiagramLayout,
 } from "./load-mermaid";
 
 const OWNED_BY_NEXT = Symbol("mermaid-next.owned");
@@ -94,7 +95,7 @@ export default class MermaidNextPlugin extends Plugin {
 				try {
 					const { svg } = await mermaid.render(
 						createMermaidId("mermaid-next"),
-						source,
+						withDiagramLayout(source, this.cfg.useElk),
 					);
 					if (!svg?.trim())
 						throw new Error(

@@ -50,6 +50,18 @@ export function getMermaidConfig(
 	};
 }
 
+/**
+ * The global `layout: "elk"` setting outranks a diagram's own default layout,
+ * which turns `swimlane-beta` into a plain ELK flowchart. Frontmatter outranks
+ * the global setting, so swimlane diagrams without their own frontmatter get
+ * `layout: swimlane` injected to keep their lanes.
+ */
+export function withDiagramLayout(source: string, useElk: boolean): string {
+	if (!useElk) return source;
+	if (!/^\s*swimlane-beta\b/.test(source)) return source;
+	return `---\nconfig:\n  layout: swimlane\n---\n${source.trimStart()}`;
+}
+
 export interface MermaidDiskCache {
 	read(version: string): Promise<string | null>;
 	write(version: string, source: string): Promise<void>;
