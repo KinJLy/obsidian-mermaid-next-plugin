@@ -1,112 +1,96 @@
-# Obsidian Mermaid Swimlane Investigation — Notes
+# Obsidian Mermaid swimlane investigation: learnings, mistakes, decisions
 
-## Original goal
-Render swimlane diagrams in Obsidian, with nodes arranged in a specific,
-predictable layout (not wherever an auto-layout algorithm decides to put them).
+## Goal
+Render `swimlane-beta` diagrams in Obsidian through the Mermaid Next plugin
+(fork: `KinJLy/obsidian-mermaid-next-plugin`), with lanes drawn as parallel
+bands.
 
-## Key learnings
+## Outcome
+Swimlanes now render. Two separate problems were in the way:
 
-1. **Obsidian bundles its own fixed Mermaid version.** It only updates when
-   Obsidian itself ships a new release, and typically lags upstream Mermaid
-   by months. There's no built-in setting to bump it.
+1. Obsidian's bundled Mermaid is too old (see "Learnings").
+2. With **ELK layout engine** on, the plugin's global `layout: "elk"` overrode
+   the swimlane layout, so `swimlane-beta` drew as a plain ELK flowchart with
+   subgraph boxes. Fixed in commit `507b55b`.
 
-2. **`swimlane-beta` is a real, new Mermaid diagram type**, added in Mermaid
-   **v11.16.0**. It uses `subgraph`/`end` for lanes — i.e. it's built on the
-   same flowchart layout engine (dagre/ELK) as regular flowcharts, just
-   constrained to render lanes as parallel bands. It does **not** give manual
-   node positioning; it inherits the same "layout engine decides" behavior.
+Commits on `main` (pushed to the fork):
 
-3. **Core distinction that mattered most:** Mermaid diagram types split into
-   - *auto-layout* types (flowchart, `swimlane-beta`, sequence, class, etc.) —
-     you describe relationships, an algorithm decides positions.
-   - *manual-layout* types — a small set where Mermaid hands positioning back
-     to you.
-   The one that actually solves "I need nodes to stay where I put them" is
-   **`block-beta` (block diagrams)**: explicit `columns N` grids, `id:N` for
-   spanning, `space` for gaps, and nested `block:groupId ... end` to simulate
-   lanes. Added to Mermaid in early 2024, so it's very likely already
-   supported by Obsidian's stock bundled Mermaid — no plugin needed.
+| Commit | What |
+| --- | --- |
+| `bf4deb2` | Isolate ELK loader registration so a failure no longer discards the CDN Mermaid |
+| `507b55b` | Keep `swimlane-beta`'s own layout when ELK is the global default |
+| `e19db9c` | Lockfile, the patch file and these notes |
 
-4. **If pixel-perfect / freeform manual layout is the real requirement**
-   (not just a grid), no Mermaid diagram type will fully satisfy that — it's
-   always some layout engine underneath. At that point a canvas tool is the
-   right category of tool, not a text-to-diagram compiler:
-   - **Excalidraw** (Obsidian plugin) — freeform, drag-and-drop, well-maintained.
-   - **draw.io / diagrams.net** (Obsidian plugin) — has a real swimlane/pool
-     shape with lane snapping, also well-maintained.
-   - Trade-off vs. Mermaid: both store diagrams as JSON/XML, not readable
-     plain text, so they don't diff cleanly in version control.
+## Learnings
 
-## Mistakes / dead ends
+### Mermaid and Obsidian
+- Obsidian bundles a fixed Mermaid version that lags upstream. There is no
+  setting to bump it, and `window.mermaid` is normally undefined (Obsidian
+  loads Mermaid lazily through `loadMermaid()`).
+- `swimlane-beta` was added in Mermaid 11.16.0. It is a flowchart-style
+  diagram with `defaultLayout: "swimlane"`. It does not give manual node
+  positioning.
+- For manual placement use `block-beta` (explicit `columns`, `space`, nested
+  blocks). If freeform layout is really needed, use a canvas tool (Excalidraw
+  or draw.io). Those formats don't diff cleanly.
+- Layout precedence in Mermaid (chunk `chunk-SHT3W25Y.mjs`):
+  `getUserDefinedConfig().layout ?? defaultLayout ?? cnf.layout`. Config
+  passed to `initialize()` counts as user config, so it beats a diagram's
+  `defaultLayout`. Frontmatter and directives beat `initialize()` config.
+- `"curve": "step"` in a flowchart gives right-angle edges with the default
+  dagre layout. It looks like ELK but is not.
 
-- **Chased a low-quality community plugin (Mermaid Next) for too long**
-  before checking its source. It has a low community trust score, a single
-  maintainer, and was already known to have at least one settings-related
-  bug (a "Replace Obsidian's Mermaid" toggle that doesn't take effect until
-  re-flipped after launch — not actually our issue, but a sign of fragility).
-- **Assumed "Source: CDN" + "Version: latest" meant an automatic fetch.**
-  In this plugin's design, CDN mode never fetches on its own — it only ever
-  reads from a **manually populated disk cache**. If that cache is empty,
-  it silently falls back to the old bundled Mermaid with **no error, no
-  console warning, nothing** — the failure mode is indistinguishable from
-  "the feature doesn't exist" unless you read the source.
-- **Even after caching correctly, the bug persisted** — traced to a second,
-  more subtle issue (see Root Cause below).
+### The plugin
+- Only ` ```mermaid-next ` blocks go through this plugin. Plain
+  ` ```mermaid ` blocks use Obsidian's own Mermaid unless **Replace Obsidian's
+  Mermaid** is on.
+- CDN mode never auto-fetches. It reads a disk cache filled by the manual
+  **Download** button. If the cache is empty it silently falls back to the
+  bundled Mermaid (11.15) with no error or warning.
+- Changing settings does not always take effect on already-rendered blocks
+  or the cached Mermaid instance. Toggling the plugin off and on (or reloading
+  the app) was needed.
+- `@mermaid-js/layout-elk` is pinned to `^0.2.1` to match the bundled core
+  (`^11.15.0`), so it may not suit a newer CDN core.
 
-## Root cause (confirmed in code)
+## Mistakes and dead ends
+- **Spent too long on the plugin before reading its source.** Reading
+  `src/load-mermaid.ts` earlier would have shown the cache-only CDN design.
+- **Named the wrong root cause first.** I diagnosed the "No diagram type
+  detected" error as an ELK loader incompatibility silently discarding the CDN
+  instance. That is a real code-path risk, and the patch for it is harmless,
+  but it was never confirmed: no ELK warning was observed in the console. The
+  cause that actually blocked swimlanes was the global ELK layout override.
+- **Stated the ELK-overrides-swimlane cause before verifying Mermaid's layout
+  precedence.** It turned out to be right, and I checked the source before
+  writing the fix, but the first statement was an inference.
+- **A shell/Python heredoc corrupted `\b` into a backspace character** when I
+  first wrote the swimlane regex. Caught by `cat -A`. Lesson: write regexes
+  and escapes through a raw string in a script file, then inspect the result.
+- **Misread a diagram as ELK.** The `"curve": "step"` flowchart was dagre.
+  Asking for the diagram source resolved it.
 
-Two compounding issues in `src/load-mermaid.ts`, found by cloning the user's
-fork (`https://github.com/KinJLy/obsidian-mermaid-next-plugin`):
+## Decisions
+- Patch the plugin rather than switch tools, since plain-text Mermaid was the
+  requirement.
+- Keep manifest `id` (`mermaid-next`) and `version` (`1.2.0`) unchanged. The
+  id is stable API, and keeping it lets the patched build replace the installed
+  copy and keep its settings. The patched build is marked only through the
+  packaged manifest `name` ("Mermaid Next (patched)") and `description`.
+- Fix the ELK/swimlane conflict by injecting `layout: swimlane` frontmatter
+  (only for `swimlane-beta` sources that lack their own frontmatter) instead of
+  dropping the global ELK default. Other diagrams keep ELK.
+- Build artifacts stay out of git. The installable package lives outside the
+  repo in `C:\Users\KinJLy\Documents\GitHub\mermaid-next-patched\`.
+- Committed `package-lock.json` and the applied patch file. The patch file is
+  redundant with `bf4deb2` and can be removed.
 
-1. **CDN mode requires an explicit manual "Download" click** in plugin
-   settings to populate a disk cache. Setting Source/Version alone does
-   nothing at render time.
-2. **`mermaid.registerLayoutLoaders(elkLayoutLoaders)` was called
-   unconditionally, inside the same `try/catch` as the CDN module import.**
-   The plugin pins `@mermaid-js/layout-elk@^0.2.1` to match the *bundled*
-   Mermaid core (`^11.15.0`). When a newer CDN-fetched Mermaid core (e.g.
-   "latest", likely 12.x) is loaded instead, that pinned ELK loader package
-   may not be API-compatible with it. If `registerLayoutLoaders()` throws,
-   the whole CDN-loaded instance was discarded and **silently replaced with
-   the old bundled 11.15 core** — which is one minor version short of
-   `swimlane-beta` (added in 11.16.0). This reproduces the exact
-   `"No diagram type detected matching given configuration"` error even with
-   a correctly cached CDN download.
-
-## Decision / fix applied
-
-Patched `getMermaid()` in `load-mermaid.ts` (fork: `KinJLy/obsidian-mermaid-next-plugin`,
-commit `55044d0`) to:
-- Separate ELK layout-loader registration into its own `try/catch`, so a
-  failure there degrades to "no ELK" instead of discarding the whole
-  CDN-loaded Mermaid instance.
-- Only attempt ELK registration when the "ELK layout engine" setting is
-  actually enabled (previously it ran regardless of that toggle).
-- Log a distinct, specific console warning when ELK registration fails, so
-  future failures are diagnosable instead of silent.
-
-Delivered as a patch file (`0001-fix-elk-layout-loader-fallback.patch`) for
-the user to apply and push themselves, since Claude has no push credentials
-for the user's GitHub repo and does not accept tokens to act as one — this
-is a firm boundary, not a configurable preference.
-
-## Open item / next step
-
-Confirm via DevTools console on next render whether the ELK-incompatibility
-warning appears. If it does, the patch should resolve it. If a *different*
-warning appears (e.g. the blob-URL `import()` itself failing), that's a
-separate root cause still to chase.
-
-## Recommended path forward (independent of the plugin bug)
-
-Given the actual requirement — clean, predictable, non-jumping node
-placement — the most efficient routes, in order of effort:
-
-1. Try `block-beta` in a **plain `mermaid` code block first** (no plugin) —
-   likely already supported by stock Obsidian.
-2. If true swimlane visuals (labeled bands, not simulated via grouping) are
-   required, use **draw.io** for its native pool/lane shape with manual
-   positioning.
-3. Keep chasing `swimlane-beta` via Mermaid Next only if staying in
-   plain-text/versionable Mermaid syntax is a hard requirement — otherwise
-   it's the highest-effort, least certain option of the three.
+## Open items
+- Diagrams with their own frontmatter do not get `layout: swimlane` injected.
+  Add it by hand there.
+- The `swimlane-beta` fix has been built and packaged but was not observed
+  rendering with ELK turned back on. Test: ELK on, plugin toggled off and on,
+  render a swimlane and an ordinary flowchart.
+- Consider sending the fix upstream (`dacrystal/obsidian-mermaid-next-plugin`).
+- `npm install` reported audit warnings that were not investigated, and esbuild's
+  postinstall script is blocked by npm (the build still works).
