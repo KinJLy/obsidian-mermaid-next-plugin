@@ -112,12 +112,12 @@ export async function getMermaid(
 	}
 
 	mermaidCache[cacheKey] = (async () => {
+		let mermaid: MermaidAPI;
 		try {
 			const blob = new Blob([diskCached], {
 				type: "application/javascript",
 			});
 			const blobUrl = URL.createObjectURL(blob);
-			let mermaid: MermaidAPI;
 			try {
 				const mod = (await import(/* @vite-ignore */ blobUrl)) as {
 					default: MermaidAPI;
@@ -126,9 +126,6 @@ export async function getMermaid(
 			} finally {
 				URL.revokeObjectURL(blobUrl);
 			}
-			mermaid.initialize(getMermaidConfig(useObsidianTheme, useElk, useHandDrawn));
-			mermaid.registerLayoutLoaders(elkLayoutLoaders);
-			return mermaid;
 		} catch (err) {
 			console.warn(
 				`[Mermaid-next] Failed to load CDN version "${version}", falling back to bundled mermaid.`,
@@ -136,6 +133,29 @@ export async function getMermaid(
 			);
 			return initBundled(useObsidianTheme, useElk, useHandDrawn);
 		}
+
+		mermaid.initialize(getMermaidConfig(useObsidianTheme, useElk, useHandDrawn));
+
+		// Registering the ELK layout loader is best-effort: the pinned
+		// @mermaid-js/layout-elk version is matched to the bundled mermaid
+		// core, and may not be API-compatible with whatever version the CDN
+		// serves (especially with version="latest"). A failure here must
+		// not sink the whole CDN-loaded mermaid instance -- that would
+		// silently fall back to the older bundled core and hide newer
+		// diagram types (e.g. swimlane-beta, added in 11.16.0) behind a
+		// misleading "No diagram type detected" error.
+		if (useElk) {
+			try {
+				mermaid.registerLayoutLoaders(elkLayoutLoaders);
+			} catch (err) {
+				console.warn(
+					`[Mermaid-next] ELK layout loader is incompatible with CDN mermaid "${version}"; continuing without ELK.`,
+					err,
+				);
+			}
+		}
+
+		return mermaid;
 	})();
 
 	return mermaidCache[cacheKey];
